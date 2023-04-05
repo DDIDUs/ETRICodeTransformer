@@ -19,5 +19,5 @@ sh run.sh
 
 ### Inference
 ```sh
-python src/translate.py --source "KOREAN_TEXT_TO_TRANSLATE" --ckpt-path "CHECKPOINT_TO_LOAD"
+python src/translate.py --source "TEXT_TO_SEARCH" --ckpt-path "CHECKPOINT_TO_LOAD"
 ```
