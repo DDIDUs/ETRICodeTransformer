@@ -181,14 +181,28 @@ def cache_processed_data(tokenizer, root_pth, cached_pth, mode):
         with open("./src/jsonl/{}/python_{}_0.jsonl".format(mode, mode)) as f:
             df += f.readlines()
 
-    print(len(df))
+    def remove_triple_quotes(text):
+        inside_quotes = False
+        result = []
+
+        i = 0
+        while i < len(text):
+            if text[i:i+3] == '"""':
+                inside_quotes = not inside_quotes
+                i += 3
+            else:
+                if not inside_quotes:
+                    result.append(text[i])
+                i += 1
+
+        return ''.join(result)
     # tokenize and save cached jsonl file
     with jsonlines.open(cached_pth, "w") as f:
         for j in df:
-            i = json.loads(j)                                                       # json 형식으로 변환
+            i = json.loads(j)
             f.write(
                 {
-                    "src": tokenizer.encode(i['docstring']),                        # 입력 
-                    "tgt": tokenizer.encode(i['code']),                             # 코드
+                    "src": tokenizer.encode(remove_triple_quotes(i['docstring'])),
+                    "tgt": tokenizer.encode(remove_triple_quotes(i['code'])),
                 }
             )
