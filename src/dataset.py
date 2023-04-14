@@ -202,7 +202,7 @@ def cache_processed_data(tokenizer, root_pth, cached_pth, mode):
             i = json.loads(j)
             f.write(
                 {
-                    "src": tokenizer.encode(remove_triple_quotes(i['docstring'])),
+                    "src": tokenizer.encode(i['docstring']),
                     "tgt": tokenizer.encode(remove_triple_quotes(i['code'])),
                 }
             )
