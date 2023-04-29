@@ -50,7 +50,6 @@ def main(rank, hparams, ngpus_per_node: int):
         )
         for mode in ["train", "valid"]
     ]
-    print(loaders[0])
 
     # get model and initialize
     model = Transformer(
