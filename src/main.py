@@ -84,6 +84,7 @@ def main(rank, hparams, ngpus_per_node: int):
             root_path=hparams.root_path,
             workers=hparams.workers,
             max_len=hparams.max_len,
+            rank=hparams.rank,
             mode="test",
         )
         test_result = trainer.test(test_loader, state_dict)
