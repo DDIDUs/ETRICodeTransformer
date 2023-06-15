@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 from utils import SequentialDistributedSampler
 
+PYTHON_LANGUAGE = Language('build/my-languages.so', 'python')
 
 class TranslationDataset(Dataset):
     """Kor-Eng translation dataset
@@ -117,7 +118,7 @@ class TranslationDataset(Dataset):
         return src, tgt_input, tgt_label, src_mask, tgt_mask
 
 
-def get_loader(tok, batch_size, root_path, workers, max_len, mode, distributed=False):
+def get_loader(tok, batch_size, root_path, workers, max_len, mode, rank, distributed=False):
     """
     Args:
         tok (BertTokenizer): BERT tokenizer to use
@@ -132,7 +133,8 @@ def get_loader(tok, batch_size, root_path, workers, max_len, mode, distributed=F
         DataLoader
     """
     assert mode in ["train", "valid", "test"]
-
+    if path.exists("./asdf/fine_tune_tok"):
+        tok = AutoTokenizer.from_pretrained("./asdf/fine_tune_tok")
     # check if cached
     cached_dir = os.path.join(root_path, f"cached/cached_{mode}.jsonl")
     if not os.path.isfile(cached_dir):
@@ -171,7 +173,7 @@ def get_loader(tok, batch_size, root_path, workers, max_len, mode, distributed=F
         drop_last=(mode == "train"),
     )
 
-def remove_triple_quotes(text):
+def remove_docstring(text):
     inside_quotes = False
     result = []
     i = 0
@@ -185,28 +187,31 @@ def remove_triple_quotes(text):
             i += 1
     return ''.join(result)
 
-def parse_ast(node, value, a):
-    test = value
-    test.append(node.type)
-    a_list = a
-    for child in node.children:
-        if child.type not in a:
-            a.append(child.type)
-        test, a_list = parse_ast(child, test, a)
-    return test, a_list
+def parse_ast(node, value, tokens):
+    ast_input = value
+    ast_input.append(node.type)
+    token_list = tokens                                                                            # AST에서 사용한 토큰의 리스트
 
-PYTHON_LANGUAGE = Language('build/my-languages.so', 'python')
+    for child in node.children:
+        if child.type not in tokens:
+            tokens.append(child.type)
+        ast_input, token_list = parse_ast(child, ast_input, tokens)                                # Depth-first search(깊이 우선 탐색)
+        
+    return ast_input, token_list                                                     
 
 def process_line(args):
     line, tokenizer = args
+
     parser = Parser()
     parser.set_language(PYTHON_LANGUAGE)
-    i = json.loads(line)
-    tree = parser.parse(bytes(remove_triple_quotes(i["code"]), "utf8"))
+
+    raw_data = json.loads(line)
+
+    tree = parser.parse(bytes(remove_docstring(raw_data["code"]), "utf8"))
     ast_code, ast_tokens = parse_ast(tree.root_node, [], [])
-    vocab = tokenizer.get_vocab()
+
     return {
-        "src": [0] + tokenizer.convert_tokens_to_ids(i['docstring_tokens']) + [2],
+        "src": [0] + tokenizer.convert_tokens_to_ids(raw_data['docstring_tokens']) + [2],
         "tgt": [0] + tokenizer.convert_tokens_to_ids(ast_code) + [2],
     }, ast_tokens
 
@@ -225,16 +230,18 @@ def cache_processed_data(tokenizer, root_pth, cached_pth, mode):
             lines += f.readlines()
 
     args = [(line, tokenizer) for line in lines]
+
     vocab = tokenizer.get_vocab()
+
     # tokenize and save cached jsonl file
     with jsonlines.open(cached_pth, "w") as f, Pool(cpu_count()) as pool:
-        for result, ast_tokens in tqdm(pool.imap_unordered(process_line, args), total=len(lines)):
+        for result, ast_tokens in tqdm(pool.imap_unordered(process_line, args), total=len(lines)):      # 멀티 프로세싱
             f.write(result)
             tmp = []
-            for j in ast_tokens:
-                if j not in vocab:
-                    tmp.append(j)
-            tokenizer.add_tokens(tmp)
+            for token in ast_tokens:
+                if token not in vocab:
+                    tmp.append(token)
+            tokenizer.add_tokens(tmp)                                                                   # 토크나이저 업데이트
             vocab = tokenizer.get_vocab()
     if mode == "train":
-        tokenizer.save_pretrained("./asdf/fine_tune_tok")
+        tokenizer.save_pretrained("./asdf/fine_tune_tok")                                               # 새로운 토큰이 추가된 토크나이저 저장
