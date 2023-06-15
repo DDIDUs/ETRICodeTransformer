@@ -2,6 +2,12 @@ import glob
 import json
 import os
 from typing import List, Tuple
+import os.path
+from os import path
+from transformers import AutoTokenizer
+import tree_sitter
+from tree_sitter import Language, Parser
+from multiprocessing import Pool, cpu_count
 
 import jsonlines
 import numpy as np
@@ -165,44 +171,70 @@ def get_loader(tok, batch_size, root_path, workers, max_len, mode, distributed=F
         drop_last=(mode == "train"),
     )
 
+def remove_triple_quotes(text):
+    inside_quotes = False
+    result = []
+    i = 0
+    while i < len(text):
+        if text[i:i+3] == '"""':
+            inside_quotes = not inside_quotes
+            i += 3
+        else:
+            if not inside_quotes:
+                result.append(text[i])
+            i += 1
+    return ''.join(result)
+
+def parse_ast(node, value, a):
+    test = value
+    test.append(node.type)
+    a_list = a
+    for child in node.children:
+        if child.type not in a:
+            a.append(child.type)
+        test, a_list = parse_ast(child, test, a)
+    return test, a_list
+
+PYTHON_LANGUAGE = Language('build/my-languages.so', 'python')
+
+def process_line(args):
+    line, tokenizer = args
+    parser = Parser()
+    parser.set_language(PYTHON_LANGUAGE)
+    i = json.loads(line)
+    tree = parser.parse(bytes(remove_triple_quotes(i["code"]), "utf8"))
+    ast_code, ast_tokens = parse_ast(tree.root_node, [], [])
+    vocab = tokenizer.get_vocab()
+    return {
+        "src": [0] + tokenizer.convert_tokens_to_ids(i['docstring_tokens']) + [2],
+        "tgt": [0] + tokenizer.convert_tokens_to_ids(ast_code) + [2],
+    }, ast_tokens
 
 def cache_processed_data(tokenizer, root_pth, cached_pth, mode):
-    """Convert csv into jsonl"""
     os.makedirs(os.path.join(root_pth, "cached/"), exist_ok=True)
 
     # load raw data
-    df = []
+    lines = []
 
-    if mode == "train":                                                             # 학습 데이터 세트 로드
+    if mode == "train":
         for i in range(12):
-            with open("./src/jsonl/train/python_train_{}.jsonl".format(i)) as f:
-                df += f.readlines()
-    else:                                                                           # 평가 추론 데이터세트 로드
-        with open("./src/jsonl/{}/python_{}_0.jsonl".format(mode, mode)) as f:
-            df += f.readlines()
+            with open("./jsonl/train/python_train_{}.jsonl".format(i)) as f:
+                lines += f.readlines()
+    else:
+        with open("./jsonl/{}/python_{}_0.jsonl".format(mode, mode)) as f:
+            lines += f.readlines()
 
-    def remove_triple_quotes(text):
-        inside_quotes = False
-        result = []
-
-        i = 0
-        while i < len(text):
-            if text[i:i+3] == '"""':
-                inside_quotes = not inside_quotes
-                i += 3
-            else:
-                if not inside_quotes:
-                    result.append(text[i])
-                i += 1
-
-        return ''.join(result)
+    args = [(line, tokenizer) for line in lines]
+    vocab = tokenizer.get_vocab()
     # tokenize and save cached jsonl file
-    with jsonlines.open(cached_pth, "w") as f:
-        for j in df:
-            i = json.loads(j)
-            f.write(
-                {
-                    "src": tokenizer.encode(i['docstring'], max_length=1024, truncation=True),
-                    "tgt": tokenizer.encode(remove_triple_quotes(i['code']), max_length=1024, truncation=True),
-                }
-            )
+    with jsonlines.open(cached_pth, "w") as f, Pool(cpu_count()) as pool:
+        for result, ast_tokens in tqdm(pool.imap_unordered(process_line, args), total=len(lines)):
+            f.write(result)
+            tmp = []
+            for j in ast_tokens:
+                if j not in vocab:
+                    tmp.append(j)
+            tokenizer.add_tokens(tmp)
+            vocab = tokenizer.get_vocab()
+    if mode == "train":
+        tokenizer.save_pretrained("./asdf/fine_tune_tok")
